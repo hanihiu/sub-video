@@ -18,21 +18,50 @@ type OpenAITranscription = {
   duration?: number;
   words?: Array<{ word?: string; start?: number; end?: number }>;
   segments?: Array<{ text?: string; start?: number; end?: number }>;
-  error?: { message?: string };
+  error?: {
+    message?: string;
+    type?: string;
+    code?: string | null;
+  };
 };
+
+type OpenAIError = NonNullable<OpenAITranscription['error']>;
+
+class RequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
 
 function jsonError(message: string, status: number) {
   return Response.json({ error: message }, { status });
 }
 
-function vietnameseError(status: number, fallback?: string) {
+function vietnameseError(status: number, upstream?: OpenAIError, retryAfter?: string | null) {
   if (status === 400) return 'Video không hợp lệ hoặc không thể đọc được âm thanh.';
   if (status === 401 || status === 403) return 'Khóa OpenAI không hợp lệ hoặc chưa được cấp quyền.';
   if (status === 413) return 'Tệp video quá lớn. Hãy chọn tệp nhỏ hơn 25 MB.';
   if (status === 415) return 'Định dạng video chưa được hỗ trợ.';
-  if (status === 429) return 'Dịch vụ đang bận. Vui lòng thử lại sau ít phút.';
+  if (status === 429) {
+    const code = (upstream?.code || '').toLowerCase();
+    const type = (upstream?.type || '').toLowerCase();
+    const billingCodes = new Set([
+      'credit_balance_exhausted',
+      'organization_spend_limit_exceeded',
+      'project_spend_limit_exceeded',
+      'organization_usage_limit_exceeded',
+      'insufficient_quota',
+    ]);
+    if (billingCodes.has(code) || type === 'insufficient_quota') {
+      return 'Tài khoản OpenAI đã hết hạn mức sử dụng hoặc giới hạn chi tiêu. Hãy kiểm tra phần Billing và Limits rồi thử lại.';
+    }
+    if (retryAfter) return `OpenAI đang giới hạn yêu cầu tạm thời. Hãy thử lại sau ${retryAfter}.`;
+    return 'OpenAI đang giới hạn yêu cầu tạm thời. Vui lòng chờ một đến hai phút rồi thử lại.';
+  }
   if (status >= 500) return 'Dịch vụ tạo phụ đề đang gặp sự cố. Vui lòng thử lại sau.';
-  if (fallback && /[à-ỹÀ-Ỹ]/.test(fallback)) return fallback;
   return 'Không thể tạo phụ đề lúc này. Vui lòng thử lại.';
 }
 
@@ -96,10 +125,13 @@ export async function POST(request: Request) {
     try {
       result = JSON.parse(rawResponse) as OpenAITranscription;
     } catch {
-      throw new Error(vietnameseError(response.status));
+      throw new RequestError(vietnameseError(response.status), response.status);
     }
     if (!response.ok) {
-      throw new Error(vietnameseError(response.status, result.error?.message));
+      throw new RequestError(
+        vietnameseError(response.status, result.error, response.headers.get('retry-after')),
+        response.status,
+      );
     }
 
     const captions = buildCaptions(result.words, result.segments);
@@ -110,7 +142,8 @@ export async function POST(request: Request) {
     return Response.json({ projectId, name: projectName, fileName: file.name, language: detectedLanguage, durationMs, captions });
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : '';
-    const message = /[à-ỹÀ-Ỹ]/.test(rawMessage) ? rawMessage : vietnameseError(500);
+    const status = error instanceof RequestError ? error.status : 500;
+    const message = /[à-ỹÀ-Ỹ]/.test(rawMessage) ? rawMessage : vietnameseError(status);
     if (projectId) {
       try {
         await failProject(projectId, message);
@@ -118,6 +151,6 @@ export async function POST(request: Request) {
         // Preserve the original transcription error.
       }
     }
-    return jsonError(message, 500);
+    return jsonError(message, status);
   }
 }

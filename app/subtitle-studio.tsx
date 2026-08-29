@@ -34,6 +34,10 @@ function isVietnamese(message: string) {
   return /[à-ỹÀ-Ỹ]/.test(message);
 }
 
+function needsOpenAIBilling(message: string) {
+  return message.includes('hết hạn mức') || message.includes('giới hạn chi tiêu');
+}
+
 async function readApiJson<T>(response: Response, fallback: string): Promise<T> {
   const raw = await response.text();
   let payload: (T & { error?: string }) | null = null;
@@ -463,6 +467,19 @@ export default function SubtitleStudio() {
             <h2 id="error-title" className="mt-5 text-2xl font-semibold tracking-[-0.04em]">Chưa thể tạo phụ đề</h2>
             <p className="mt-2 text-sm leading-6 text-[#6e746b]">{error}</p>
             {error.includes('OPENAI_API_KEY') && <p className="mt-4 rounded-xl bg-[#f1f3e8] p-3 text-xs leading-5 text-[#596456]">Thêm khóa vào file <code>.dev.vars</code> theo mẫu trong dự án, sau đó chạy lại app.</p>}
+            {needsOpenAIBilling(error) && (
+              <div className="mt-4 rounded-xl bg-[#f1f3e8] p-3 text-xs leading-5 text-[#596456]">
+                <p>Hãy nạp credit hoặc điều chỉnh giới hạn chi tiêu của dự án OpenAI, sau đó bấm “Thử lại”.</p>
+                <a
+                  href="https://platform.openai.com/settings/organization/billing/overview"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-flex font-semibold text-[#35513e] underline decoration-[#9cbc4c] underline-offset-2"
+                >
+                  Mở Billing OpenAI ↗
+                </a>
+              </div>
+            )}
             <div className="mt-6 flex gap-3">
               <button onClick={resetProject} className="flex-1 rounded-full border border-[#d4d2cb] px-4 py-2.5 text-sm font-semibold">Chọn video khác</button>
               {selectedFile && <button onClick={() => void transcribe(selectedFile)} className="flex-1 rounded-full bg-[#1f3b2d] px-4 py-2.5 text-sm font-semibold text-white">Thử lại</button>}
